@@ -21,45 +21,68 @@
 - ``@PostConstruct`` 注解的方法访问修饰符可以是 public、protected、package private 或 private，即所有访问级别都可以。
 - ``@PostConstruct`` 注解的方法不能用``static``修饰，除了在Application客户端中。
 - ``@PostConstruct`` 注解的方法可以``final``修饰
-- ``@PostConstruct`` 注解的方法不能抛出未经检查的异常(unchecked exception),除非
+- ``@PostConstruct`` 注解的方法不能抛出未经检查的异常(unchecked exception)
 
 # 二、核心原理与执行顺序
-
+![image](https://github.com/user-attachments/assets/a569a7d2-76b4-45ac-b547-4b79eb388a12)
+## 执行顺序
 @PostConstruct用于标记在对象构造完成且依赖注入完成后执行的初始化方法。在Spring框架中的执行顺序为：
-构造函数 -> @Autowired依赖注入 -> @PostConstruct方法 -> Bean初始化完成
-进入``@PostConstruct``的源码中，发现只有``CommonAnnotationBeanPostProcessor``这个类用到
+构造函数 -> @Autowired依赖注入 -> @PostConstruct方法 -> Bean初始化完成 -> destory方法
+## 源码分析
+进入``@PostConstruct``的源码中，发现只有``CommonAnnotationBeanPostProcessor``这个类的下面方法用到
 ![image](https://github.com/user-attachments/assets/f721d7fa-3e12-4360-890c-d53cc04736da)
+这个方法也很简单，就是把这个注解赋值到``CommonAnnotationBeanPostProcessor``的父类``InitDestroyAnnotationBeanPostProcessor``中的``initAnnotationType``字段
+![image](https://github.com/user-attachments/assets/4d0934c5-b375-4971-8ec2-e721ab2c608c)
+那么字段又在哪里使用呢？ 很巧，只有``InitDestroyAnnotationBeanPostProcessor``中使用，那我们直接看使用的方法
+![image](https://github.com/user-attachments/assets/ad6c80de-9a93-4358-b3a4-2e8256809f52)
+``buildLifecycleMetadata`` 方法主要做了
+1. 先判断这个类或类中方法或字段是否有``initAnnotationType``和``destroyAnnotationType``注解
+2. 将该类以及所有父类的所有方法``initAnnotationType``和``destroyAnnotationType``注解的方法，作为参数创建``LifecycleElement``对象并存入``currInitMethods``和``currDestroyMethods``中
+3. 把上面的初始化和销毁方法方法作为参数创建``LifecycleMetadata``对象
+
+通过上面步骤，我们就可以发现，在Spring中有多个初始化方法是不会报错的，相反而是全部存入``currInitMethods``集合中，并且所有的父类都会存入这个集合，
+ ![image](https://github.com/user-attachments/assets/9627e9c5-d9ee-443e-925d-2ea0b705a014)
+ 其中在第二步创建``LifecycleElement``对象时，可以神奇的发现这里，如果方法的参数数量不为0就会抛出异常，这就和使用条件中的``@PostConstruct`` 注解的方法不能有参数相对应了。
+
+那么``buildLifecycleMetadata``方法又在哪里被使用？
+![image](https://github.com/user-attachments/assets/e199ba84-f31a-4b41-b813-0231afb31e23)
+
+可以看到这个方法主要是从``lifecycleMetadataCache``中获取某个类的``LifecycleMetadata``，如果``lifecycleMetadataCache``为空，那么就调用最开始的方法，否则就会从``lifecycleMetadataCache``尝试获取，如果获取不到则通过大名鼎鼎的``Double-Check``方式，也就是双重检索单例模式，并且使用了``ConcurrentHashMap``，来防止并发问题，``ConcurrentHashMap``如何防止并发可看相关文章。
 
 # 三、使用示例
 以下通过一个简单的 Spring Boot 项目示例来展示``@PostConstruct``的用法。
 首先，创建一个普通的 Java 类，并在其中定义一个带有``@PostConstruct``注解的方法：
 ```java
-import org.springframework.stereotype.Component;
-
 @Component
-public class ExampleService {
+@Slf4j
+public class PostConstructTest {
+    @Autowired
+    private UserMapper userMapper;
 
-    @Autowired 
-    private DataSource dataSource;
-
-    public ExampleService() {
-        System.out.println("ExampleService的构造函数被调用");
+    public PostConstructTest() {
+        log.info("Constructor");
     }
 
     @PostConstruct
-    public void init() {
-        if(dataSource != null) {
-            System.out.println("ExampleService的@PostConstruct注解的init方法被调用");
+    public void demo1() {
+        if (userMapper != null) {
+            log.info("autowired");
         }
-        System.out.println("ExampleService的@PostConstruct注解的init方法被调用");
+        log.info("PostConstruct1");
+    }
+
+    @PostConstruct
+    public void demo2() {
+        log.info("PostConstruct2");
     }
 }
 ```
 然后，启动 Spring Boot 应用程序，观察控制台输出：
-
+```
+2025-03-12 22:40:48.529  INFO 7748 --- [           main] c.a.mpdemo1010.config.PostConstructTest  : Constructor
+2025-03-12 22:40:49.378  INFO 7748 --- [           main] c.a.mpdemo1010.config.PostConstructTest  : autowired
+2025-03-12 22:40:49.378  INFO 7748 --- [           main] c.a.mpdemo1010.config.PostConstructTest  : PostConstruct1
+2025-03-12 22:40:49.378  INFO 7748 --- [           main] c.a.mpdemo1010.config.PostConstructTest  : PostConstruct2
+```
 从输出结果可以清晰地看到，构造函数先被调用，随后``@PostConstruct``注解的方法被调用。这表明``@PostConstruct``注解的方法确实是在对象创建和依赖注入完成之后执行的。
 
-# 四、失效场景
-
-
-# 
